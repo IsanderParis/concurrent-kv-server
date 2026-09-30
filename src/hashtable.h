@@ -15,7 +15,7 @@ typedef enum {
 
 hashtable_t *ht_create(size_t num_buckets);
 void ht_destroy(hashtable_t *ht);
-ht_status_t ht_set(hashtable_t *ht, const char *key, void *value);
+ht_status_t ht_set(hashtable_t *ht, const char *key, const char *value);
 char *ht_get(hashtable_t *ht, const char *key);
 ht_status_t ht_del(hashtable_t *ht, const char *key);
 size_t ht_size(hashtable_t *ht);

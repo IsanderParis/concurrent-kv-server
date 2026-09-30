@@ -90,7 +90,7 @@ char *ht_get(hashtable_t *ht, const char *key) {
     return NULL;
 }                                          
 
-size_t ht_size(const hashtable_t *ht) {
+size_t ht_size(hashtable_t *ht) {
     if (!ht) {
         return 0;
     }
