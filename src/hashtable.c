@@ -2,6 +2,7 @@
 
 #include <stdlib.h> 
 #include <string.h>
+#include <pthread.h>
 
 typedef struct ht_entry {
     char *key;
@@ -13,6 +14,7 @@ struct hashtable {
     ht_entry_t **buckets;
     size_t num_buckets;
     size_t size;
+    pthread_mutex_t lock;
 };
 
 static unsigned long djb2(const char *str) {
@@ -41,7 +43,9 @@ hashtable_t *ht_create(size_t num_buckets) {
     }
 
     ht->buckets = calloc(num_buckets, sizeof *ht->buckets);
-    if(!ht->buckets) {
+
+    if(pthread_mutex_init(&ht->lock, NULL) != 0) {
+        free(ht->buckets);
         free(ht);
         return NULL;
     }
@@ -52,14 +56,18 @@ hashtable_t *ht_create(size_t num_buckets) {
     return ht;
 }
 
+/*
+ * NO es thread-safe: quien llama debe garantizar que ningún otro thread
+ * esté usando la tabla (por ejemplo, haciendo pthread_join antes).
+ */
 void ht_destroy(hashtable_t *ht) {
-    if(!ht) {
+    if (!ht) {
         return;
     }
 
-    for(size_t i = 0; i < ht->num_buckets; ++i) {
+    for (size_t i = 0; i < ht->num_buckets; ++i) {
         ht_entry_t *e = ht->buckets[i];
-        while(e) {
+        while (e) {
             ht_entry_t *next = e->next;
             free(e->key);
             free(e->value);
@@ -68,6 +76,7 @@ void ht_destroy(hashtable_t *ht) {
         }
     }
 
+    pthread_mutex_destroy(&ht->lock);
     free(ht->buckets);
     free(ht);
 }
@@ -77,30 +86,40 @@ char *ht_get(hashtable_t *ht, const char *key) {
         return NULL;
     }
 
+    char *result = NULL;
+    pthread_mutex_lock(&ht->lock);
+
     size_t index = bucket_index(ht, key);
     ht_entry_t *e = ht->buckets[index];        
 
     while (e) {
         if (strcmp(e->key, key) == 0) {
-            return strdup(e->value);        
+            result = strdup(e->value);
+            break;
         }
         e = e->next;
     }
 
-    return NULL;
+    pthread_mutex_unlock(&ht->lock);
+    return result;
 }                                          
 
 size_t ht_size(hashtable_t *ht) {
     if (!ht) {
         return 0;
     }
-    return ht->size;
+    pthread_mutex_lock(&ht->lock);
+    size_t size = ht->size;
+    pthread_mutex_unlock(&ht->lock);
+    return size;
 }
 
 ht_status_t ht_set(hashtable_t *ht, const char *key, const char *value) {  
     if (!ht || !key || !value) {
         return HT_ERR;
     }
+
+    pthread_mutex_lock(&ht->lock);
 
     size_t index = bucket_index(ht, key);
     ht_entry_t *e = ht->buckets[index];
@@ -110,10 +129,12 @@ ht_status_t ht_set(hashtable_t *ht, const char *key, const char *value) {
         if (strcmp(e->key, key) == 0) {
             char *new_value = strdup(value);   
             if (!new_value) {
+                pthread_mutex_unlock(&ht->lock);
                 return HT_ERR;                 
             }
             free(e->value);                   
-            e->value = new_value;              
+            e->value = new_value;  
+            pthread_mutex_unlock(&ht->lock);            
             return HT_OK;
         }
         e = e->next;
@@ -121,12 +142,14 @@ ht_status_t ht_set(hashtable_t *ht, const char *key, const char *value) {
 
     ht_entry_t *new_entry = malloc(sizeof(*new_entry));
     if (!new_entry) {
+        pthread_mutex_unlock(&ht->lock);
         return HT_ERR;
     }
 
     new_entry->key = strdup(key);
     if (!new_entry->key) {
         free(new_entry);
+        pthread_mutex_unlock(&ht->lock);
         return HT_ERR;
     }
 
@@ -134,12 +157,15 @@ ht_status_t ht_set(hashtable_t *ht, const char *key, const char *value) {
     if (!new_entry->value) {
         free(new_entry->key);                  
         free(new_entry);
+        pthread_mutex_unlock(&ht->lock);
         return HT_ERR;
     }
 
     new_entry->next = ht->buckets[index];
     ht->buckets[index] = new_entry;
     ht->size++;
+
+    pthread_mutex_unlock(&ht->lock);
 
     return HT_OK;
 }
@@ -148,6 +174,8 @@ ht_status_t ht_del(hashtable_t *ht, const char *key) {
     if (!ht || !key) {
         return HT_ERR;
     }
+
+    pthread_mutex_lock(&ht->lock);
 
     size_t index = bucket_index(ht, key);
     ht_entry_t *e = ht->buckets[index];
@@ -164,11 +192,13 @@ ht_status_t ht_del(hashtable_t *ht, const char *key) {
             free(e->value);
             free(e);
             ht->size--;
+            pthread_mutex_unlock(&ht->lock);
             return HT_OK;
         }
         prev = e;
         e = e->next;
     }
 
+    pthread_mutex_unlock(&ht->lock);
     return HT_NOT_FOUND;
 }
